@@ -8,7 +8,13 @@ require("dotenv").config();
 
 const upload = multer();
 const app = express();
-app.use(cors());
+app.use(
+  cors({
+    origin: "*",
+    allowedHeaders: ["Authorization", "Content-Type"],
+    methods: ["GET", "POST", "OPTIONS"],
+  })
+);
 app.use(express.json());
 
 const PINATA_FILE_ENDPOINT = "https://api.pinata.cloud/pinning/pinFileToIPFS";
@@ -48,12 +54,12 @@ async function getSupabaseAdmin() {
 
 async function requireAdmin(req, res) {
   try {
-    const token = (req.headers.authorization || "").replace("Bearer ", "").trim();
+    const token = (req.headers.authorization || "").replace(/Bearer\s+/i, "").trim();
     if (!token) return res.status(401).json({ error: "Missing bearer token" });
     const adminClient = await getSupabaseAdmin();
     const { data, error } = await adminClient.auth.getUser(token);
     if (error || !data?.user) return res.status(401).json({ error: "Invalid token" });
-    if (!ADMIN_EMAIL || data.user.email !== ADMIN_EMAIL) {
+    if (!ADMIN_EMAIL || data.user.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
       return res.status(403).json({ error: "Forbidden" });
     }
     return data.user;
