@@ -1,9 +1,9 @@
 {
   "name": "pin-server",
   "version": "1.0.0",
-  "main": "server/pin.js",
+  "main": "pin.js",
   "scripts": {
-    "start": "node server/pin.js"
+    "start": "node pin.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
