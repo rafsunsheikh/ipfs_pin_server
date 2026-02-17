@@ -3,14 +3,25 @@ const multer = require("multer");
 const FormData = require("form-data");
 const fetch = require("node-fetch");
 const cors = require("cors");
+const fs = require("fs");
 require("dotenv").config();
 
 const upload = multer();
 const app = express();
 app.use(cors());
+app.use(express.json());
 
 const PINATA_FILE_ENDPOINT = "https://api.pinata.cloud/pinning/pinFileToIPFS";
 const PINATA_JSON_ENDPOINT = "https://api.pinata.cloud/pinning/pinJSONToIPFS";
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+const allowedRoles = [
+  "Pooling Officer",
+  "Magistrate",
+  "DC Office",
+  "Election Commission Office",
+  "Pooling Booth Agent",
+  "Visitor",
+];
 
 function getAuthHeader() {
   if (process.env.PINATA_JWT) return { Authorization: `Bearer ${process.env.PINATA_JWT}` };
@@ -22,6 +33,94 @@ function getAuthHeader() {
   }
   throw new Error("Pinata credentials missing (set PINATA_JWT or API key/secret)");
 }
+
+// --- Supabase admin helper (dynamic import keeps CJS file working) ---
+let supabaseAdmin = null;
+async function getSupabaseAdmin() {
+  if (supabaseAdmin) return supabaseAdmin;
+  const { createClient } = await import("@supabase/supabase-js");
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error("SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing");
+  }
+  supabaseAdmin = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+  return supabaseAdmin;
+}
+
+async function requireAdmin(req, res) {
+  try {
+    const token = (req.headers.authorization || "").replace("Bearer ", "").trim();
+    if (!token) return res.status(401).json({ error: "Missing bearer token" });
+    const adminClient = await getSupabaseAdmin();
+    const { data, error } = await adminClient.auth.getUser(token);
+    if (error || !data?.user) return res.status(401).json({ error: "Invalid token" });
+    if (!ADMIN_EMAIL || data.user.email !== ADMIN_EMAIL) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    return data.user;
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "admin check failed" });
+  }
+}
+
+// list pending (approved !== true) users
+app.get("/api/admin/pending-users", async (req, res) => {
+  const me = await requireAdmin(req, res);
+  if (!me || me.error) return;
+  try {
+    const adminClient = await getSupabaseAdmin();
+    const pending = [];
+    let page = 1;
+    const perPage = 100;
+    while (true) {
+      const { data, error } = await adminClient.auth.admin.listUsers({ page, perPage });
+      if (error) throw error;
+      if (!data?.users?.length) break;
+      for (const u of data.users) {
+        const meta = u.user_metadata || {};
+        if (meta.approved === true) continue;
+        if (!allowedRoles.includes(meta.category)) continue;
+        pending.push({
+          id: u.id,
+          email: u.email,
+          category: meta.category,
+          fullName: meta.fullName,
+          phone: meta.phone,
+          organization: meta.organization,
+          created_at: u.created_at,
+        });
+      }
+      if (data.users.length < perPage) break;
+      page += 1;
+    }
+    return res.json({ pending });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "Failed to list users" });
+  }
+});
+
+// approve / reject user
+app.post("/api/admin/approve", async (req, res) => {
+  const me = await requireAdmin(req, res);
+  if (!me || me.error) return;
+  const { userId, approve } = req.body || {};
+  if (!userId || typeof approve !== "boolean") return res.status(400).json({ error: "userId and approve required" });
+  try {
+    const adminClient = await getSupabaseAdmin();
+    if (approve) {
+      const { data, error } = await adminClient.auth.admin.updateUserById(userId, {
+        user_metadata: { approved: true },
+      });
+      if (error) throw error;
+      return res.json({ ok: true, user: data.user });
+    } else {
+      const { error } = await adminClient.auth.admin.deleteUser(userId);
+      if (error) throw error;
+      return res.json({ ok: true, deleted: userId });
+    }
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "Failed to update user" });
+  }
+});
 
 app.post("/api/pin", upload.single("file"), async (req, res) => {
   try {
