@@ -108,6 +108,126 @@ app.get("/api/admin/pending-users", async (req, res) => {
   }
 });
 
+// list all users with optional filters/search (admin only)
+app.get("/api/admin/users", async (req, res) => {
+  const me = await requireAdmin(req, res);
+  if (!me || me.error) return;
+  const { q, division, district, constituency } = req.query;
+  try {
+    const adminClient = await getSupabaseAdmin();
+    const results = [];
+    let page = 1;
+    const perPage = 100;
+    while (true) {
+      const { data, error } = await adminClient.auth.admin.listUsers({ page, perPage });
+      if (error) throw error;
+      if (!data?.users?.length) break;
+      for (const u of data.users) {
+        const meta = u.user_metadata || {};
+        const locMatch =
+          (!division || meta.division === division) &&
+          (!district || meta.district === district) &&
+          (!constituency || meta.constituency === constituency);
+        const term = (q || "").toLowerCase();
+        const text = `${u.email || ""} ${meta.fullName || ""} ${meta.category || ""}`.toLowerCase();
+        const searchMatch = !term || text.includes(term);
+        if (locMatch && searchMatch) {
+          results.push({
+            id: u.id,
+            email: u.email,
+            category: meta.category,
+            fullName: meta.fullName,
+            phone: meta.phone,
+            organization: meta.organization,
+            division: meta.division,
+            district: meta.district,
+            constituency: meta.constituency,
+            booth: meta.booth,
+            approved: meta.approved,
+            created_at: u.created_at,
+          });
+        }
+      }
+      if (data.users.length < perPage) break;
+      page += 1;
+    }
+    return res.json({ users: results });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "Failed to list users" });
+  }
+});
+
+// generic user auth (non-admin) for scoped directory search
+async function requireUser(req, res) {
+  try {
+    const token = (req.headers.authorization || "").replace(/Bearer\s+/i, "").trim();
+    if (!token) return res.status(401).json({ error: "Missing bearer token" });
+    const adminClient = await getSupabaseAdmin();
+    const { data, error } = await adminClient.auth.getUser(token);
+    if (error || !data?.user) return res.status(401).json({ error: "Invalid token" });
+    return data.user;
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "user check failed" });
+  }
+}
+
+app.get("/api/search/users", async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user || user.error) return;
+  const meta = user.user_metadata || {};
+  const role = meta.category;
+  const { q } = req.query;
+  let scope = {};
+  if (role === "District Commission Office" || role === "District Election Commission Office") {
+    scope = { district: meta.district };
+  } else if (role === "Returning officer") {
+    scope = { district: meta.district, constituency: meta.constituency };
+  } else {
+    scope = { email: user.email }; // minimal access
+  }
+  try {
+    const adminClient = await getSupabaseAdmin();
+    const results = [];
+    let page = 1;
+    const perPage = 100;
+    while (true) {
+      const { data, error } = await adminClient.auth.admin.listUsers({ page, perPage });
+      if (error) throw error;
+      if (!data?.users?.length) break;
+      for (const u of data.users) {
+        const m = u.user_metadata || {};
+        const inScope =
+          (scope.email && u.email === scope.email) ||
+          ((!scope.email && scope.district === m.district) &&
+            (!scope.constituency || scope.constituency === m.constituency));
+        if (!inScope) continue;
+        const term = (q || "").toLowerCase();
+        const text = `${u.email || ""} ${m.fullName || ""} ${m.category || ""}`.toLowerCase();
+        if (term && !text.includes(term)) continue;
+        results.push({
+          id: u.id,
+          email: u.email,
+          category: m.category,
+          fullName: m.fullName,
+          phone: m.phone,
+          organization: m.organization,
+          division: m.division,
+          district: m.district,
+          constituency: m.constituency,
+          booth: m.booth,
+          approved: m.approved,
+          created_at: u.created_at,
+        });
+      }
+      if (data.users.length < perPage) break;
+      page += 1;
+    }
+    return res.json({ users: results });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "Failed to list users" });
+  }
+});
+
 // approve / reject user
 app.post("/api/admin/approve", async (req, res) => {
   const me = await requireAdmin(req, res);
