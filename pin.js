@@ -52,6 +52,13 @@ async function getSupabaseAdmin() {
   return supabaseAdmin;
 }
 
+let supabaseDb = null;
+async function getSupabaseDb() {
+  if (supabaseDb) return supabaseDb;
+  supabaseDb = await getSupabaseAdmin(); // same service-role client can query tables
+  return supabaseDb;
+}
+
 async function requireAdmin(req, res) {
   try {
     const token = (req.headers.authorization || "").replace(/Bearer\s+/i, "").trim();
@@ -225,6 +232,121 @@ app.get("/api/search/users", async (req, res) => {
     return res.json({ users: results });
   } catch (err) {
     return res.status(500).json({ error: err.message || "Failed to list users" });
+  }
+});
+
+// ---------- Pending results workflow ----------
+const PENDING_TABLE = "pending_results";
+
+app.post("/api/pending", async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user || user.error) return;
+  const meta = user.user_metadata || {};
+  if (meta.category !== "Presiding officer") return res.status(403).json({ error: "Only presiding officers can submit" });
+  const { data, cid, expectedAgents } = req.body || {};
+  if (!data || !cid || !expectedAgents) return res.status(400).json({ error: "data, cid, expectedAgents required" });
+  const expected = Number(expectedAgents);
+  if (!Number.isFinite(expected) || expected <= 0) return res.status(400).json({ error: "expectedAgents must be >0" });
+  try {
+    const db = await getSupabaseDb();
+    const { data: inserted, error } = await db
+      .from(PENDING_TABLE)
+      .insert({
+        data,
+        cid,
+        presiding_email: user.email,
+        expected_agents: expected,
+        division: meta.division || null,
+        district: meta.district || null,
+        constituency: meta.constituency || null,
+        booth: meta.booth || null,
+        status: "pending",
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    return res.json(inserted);
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "insert failed" });
+  }
+});
+
+app.get("/api/pending", async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user || user.error) return;
+  const meta = user.user_metadata || {};
+  const role = meta.category;
+  let filter = {};
+  if (role === "Presiding officer") filter = { presiding_email: user.email };
+  else if (role === "Pooling agents") filter = { booth: meta.booth, constituency: meta.constituency, district: meta.district };
+  else if (role === "Returning officer") filter = { constituency: meta.constituency, district: meta.district };
+  else if (role === "District Commission Office" || role === "District Election Commission Office") filter = { district: meta.district };
+  try {
+    const db = await getSupabaseDb();
+    let query = db.from(PENDING_TABLE).select("*").order("created_at", { ascending: false });
+    Object.entries(filter).forEach(([k, v]) => {
+      if (v) query = query.eq(k, v);
+    });
+    const { data: rows, error } = await query;
+    if (error) throw error;
+    return res.json({ items: rows || [] });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "fetch failed" });
+  }
+});
+
+app.post("/api/pending/sign", async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user || user.error) return;
+  const meta = user.user_metadata || {};
+  if (meta.category !== "Pooling agents") return res.status(403).json({ error: "Only pooling agents can sign" });
+  const { id } = req.body || {};
+  if (!id) return res.status(400).json({ error: "id required" });
+  try {
+    const db = await getSupabaseDb();
+    const { data: row, error: err1 } = await db.from(PENDING_TABLE).select("*").eq("id", id).single();
+    if (err1) throw err1;
+    if (row.booth !== meta.booth) return res.status(403).json({ error: "Booth mismatch" });
+    const signed = row.signed_agents || [];
+    if (signed.includes(user.email)) return res.json({ ok: true, alreadySigned: true });
+    signed.push(user.email);
+    const { data: updated, error: err2 } = await db
+      .from(PENDING_TABLE)
+      .update({ signed_agents: signed })
+      .eq("id", id)
+      .select()
+      .single();
+    if (err2) throw err2;
+    return res.json({ ok: true, row: updated });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "sign failed" });
+  }
+});
+
+app.post("/api/pending/finalize", async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user || user.error) return;
+  const meta = user.user_metadata || {};
+  if (meta.category !== "Presiding officer") return res.status(403).json({ error: "Only presiding officers can finalize" });
+  const { id, txHash } = req.body || {};
+  if (!id || !txHash) return res.status(400).json({ error: "id and txHash required" });
+  try {
+    const db = await getSupabaseDb();
+    const { data: row, error: err1 } = await db.from(PENDING_TABLE).select("*").eq("id", id).single();
+    if (err1) throw err1;
+    if (row.presiding_email !== user.email) return res.status(403).json({ error: "Not owner" });
+    const signed = row.signed_agents || [];
+    if ((signed || []).length < row.expected_agents) return res.status(400).json({ error: "Not enough signatures" });
+    const { data: updated, error: err2 } = await db
+      .from(PENDING_TABLE)
+      .update({ status: "finalized", tx_hash: txHash })
+      .eq("id", id)
+      .select()
+      .single();
+    if (err2) throw err2;
+    return res.json({ ok: true, row: updated });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "finalize failed" });
   }
 });
 
