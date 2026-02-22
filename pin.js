@@ -21,12 +21,12 @@ const PINATA_FILE_ENDPOINT = "https://api.pinata.cloud/pinning/pinFileToIPFS";
 const PINATA_JSON_ENDPOINT = "https://api.pinata.cloud/pinning/pinJSONToIPFS";
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 const allowedRoles = [
-  "Pooling Officer",
-  "Magistrate",
-  "DC Office",
-  "Election Commission Office",
-  "Pooling Booth Agent",
-  "Visitor",
+  "Pooling agents",
+  "Presiding officer",
+  "Returning officer",
+  "District Commission Office",
+  "District Election Commission Office",
+  "Election Commission HQ",
 ];
 
 function getAuthHeader() {
@@ -92,6 +92,10 @@ app.get("/api/admin/pending-users", async (req, res) => {
           fullName: meta.fullName,
           phone: meta.phone,
           organization: meta.organization,
+          division: meta.division,
+          district: meta.district,
+          constituency: meta.constituency,
+          booth: meta.booth,
           created_at: u.created_at,
         });
       }
