@@ -22,8 +22,8 @@ const PINATA_FILE_ENDPOINT = "https://api.pinata.cloud/pinning/pinFileToIPFS";
 const PINATA_JSON_ENDPOINT = "https://api.pinata.cloud/pinning/pinJSONToIPFS";
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
-const BASESCAN_API_KEY = process.env.BASESCAN_API_KEY || process.env.ETHERSCAN_API_KEY;
-const BASESCAN_ENDPOINT = process.env.BASESCAN_ENDPOINT || "https://api-sepolia.basescan.org/api";
+const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY;
+const ETHERSCAN_ENDPOINT = process.env.ETHERSCAN_ENDPOINT || "https://api-sepolia.etherscan.io/api";
 const RPC_URL = process.env.BASE_SEPOLIA_RPC_URL || process.env.RPC_URL;
 const allowedRoles = [
   "Pooling agents",
@@ -355,7 +355,7 @@ app.post("/api/pending/finalize", async (req, res) => {
   }
 });
 
-// -------- Records from BaseScan --------
+// -------- Records from Etherscan / RPC --------
 const recordIface = new Interface([
   "event RecordStored(uint256 id,string data,string cid,address signer,uint64 createdAt)",
   "function storeRecord(string data,string cid)",
@@ -426,7 +426,7 @@ async function fetchLogs() {
 }
 
 async function fetchTxListExplorer() {
-  const url = `${BASESCAN_ENDPOINT}?module=account&action=txlist&address=${CONTRACT_ADDRESS}&sort=desc&apikey=${BASESCAN_API_KEY}`;
+  const url = `${ETHERSCAN_ENDPOINT}?module=account&action=txlist&address=${CONTRACT_ADDRESS}&sort=desc&apikey=${ETHERSCAN_API_KEY}`;
   const r = await fetch(url);
   if (!r.ok) throw new Error(await r.text());
   const j = await r.json();
@@ -486,7 +486,7 @@ app.get("/api/admin/txlist", async (req, res) => {
 });
 
 app.get("/api/records", async (req, res) => {
-  if (!CONTRACT_ADDRESS || !BASESCAN_API_KEY) return res.status(500).json({ error: "Explorer API key or contract missing" });
+  if (!CONTRACT_ADDRESS || !ETHERSCAN_API_KEY) return res.status(500).json({ error: "Explorer API key or contract missing" });
   const { division, district, constituency, booth } = req.query;
   try {
     const mapped = await fetchTxList();
