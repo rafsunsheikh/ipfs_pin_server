@@ -253,6 +253,12 @@ app.post("/api/pending", async (req, res) => {
   if (!data || !cid || !expectedAgents) return res.status(400).json({ error: "data, cid, expectedAgents required" });
   const expected = Number(expectedAgents);
   if (!Number.isFinite(expected) || expected <= 0) return res.status(400).json({ error: "expectedAgents must be >0" });
+  let parsed = {};
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    parsed = {};
+  }
   try {
     const db = await getSupabaseDb();
     const { data: inserted, error } = await db
@@ -262,10 +268,10 @@ app.post("/api/pending", async (req, res) => {
         cid,
         presiding_email: user.email,
         expected_agents: expected,
-        division: meta.division || null,
-        district: meta.district || null,
-        constituency: meta.constituency || null,
-        booth: meta.booth || null,
+        division: meta.division || parsed.division || null,
+        district: meta.district || parsed.district || null,
+        constituency: meta.constituency || parsed.constituency || null,
+        booth: meta.booth || parsed.booth || parsed.boothName || null,
         status: "pending",
       })
       .select()
