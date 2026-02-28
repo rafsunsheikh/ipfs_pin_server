@@ -4,6 +4,7 @@ const FormData = require("form-data");
 const fetch = require("node-fetch");
 const cors = require("cors");
 const fs = require("fs");
+const { Interface } = require("ethers");
 require("dotenv").config();
 
 const upload = multer();
@@ -20,6 +21,8 @@ app.use(express.json());
 const PINATA_FILE_ENDPOINT = "https://api.pinata.cloud/pinning/pinFileToIPFS";
 const PINATA_JSON_ENDPOINT = "https://api.pinata.cloud/pinning/pinJSONToIPFS";
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
+const BASESCAN_API_KEY = process.env.BASESCAN_API_KEY || process.env.ETHERSCAN_API_KEY;
 const allowedRoles = [
   "Pooling agents",
   "Presiding officer",
@@ -347,6 +350,65 @@ app.post("/api/pending/finalize", async (req, res) => {
     return res.json({ ok: true, row: updated });
   } catch (err) {
     return res.status(500).json({ error: err.message || "finalize failed" });
+  }
+});
+
+// -------- Records from BaseScan --------
+const recordIface = new Interface([
+  "event RecordStored(uint256 id,string data,string cid,address signer,uint64 createdAt)",
+]);
+
+app.get("/api/records", async (req, res) => {
+  if (!CONTRACT_ADDRESS || !BASESCAN_API_KEY) return res.status(500).json({ error: "Explorer API key or contract missing" });
+  const { division, district, constituency, booth } = req.query;
+  try {
+    const url = `https://api.basescan.org/api?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address=${CONTRACT_ADDRESS}&topic0=${recordIface.getEvent("RecordStored").topicHash}&apikey=${BASESCAN_API_KEY}`;
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(await r.text());
+    const j = await r.json();
+    const logs = j.result || [];
+    const mapped = logs.map((lg) => {
+      try {
+        const parsed = recordIface.parseLog({ data: lg.data, topics: lg.topics });
+        const dataStr = parsed.args.data;
+        let parsedData = {};
+        try { parsedData = JSON.parse(dataStr); } catch (_) {}
+        const div = parsedData.division || "";
+        const dist = parsedData.district || "";
+        const cons = parsedData.constituency || "";
+        const boothVal = parsedData.boothName || parsedData.booth || "";
+        const totalVoters = parsedData.totalVoters || "";
+        const parties = parsedData.parties || [];
+        const totalVotes = Array.isArray(parties) ? parties.reduce((s, p) => s + (p.votes || 0), 0) : "";
+        const time = lg.timeStamp ? new Date(Number(lg.timeStamp) * 1000).toISOString() : new Date().toISOString();
+        return {
+          tx: lg.transactionHash,
+          executedAt: time,
+          division: div,
+          district: dist,
+          constituency: cons,
+          booth: boothVal,
+          totalVoters,
+          totalVotes,
+          data: dataStr,
+          cid: parsed.args.cid,
+          signer: parsed.args.signer,
+        };
+      } catch (err) {
+        return null;
+      }
+    }).filter(Boolean);
+
+    const filtered = mapped.filter((r) => {
+      const divOk = !division || r.division === division;
+      const distOk = !district || r.district === district;
+      const consOk = !constituency || r.constituency === constituency;
+      const boothOk = !booth || r.booth === booth;
+      return divOk && distOk && consOk && boothOk;
+    });
+    return res.json({ items: filtered });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "Failed to load records" });
   }
 });
 
