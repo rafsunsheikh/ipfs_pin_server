@@ -357,49 +357,100 @@ app.post("/api/pending/finalize", async (req, res) => {
 // -------- Records from BaseScan --------
 const recordIface = new Interface([
   "event RecordStored(uint256 id,string data,string cid,address signer,uint64 createdAt)",
+  "function storeRecord(string data,string cid)",
 ]);
+
+function decodeData(dataStr) {
+  let parsedData = {};
+  try { parsedData = JSON.parse(dataStr); } catch (_) {}
+  const div = parsedData.division || "";
+  const dist = parsedData.district || "";
+  const cons = parsedData.constituency || "";
+  const boothVal = parsedData.boothName || parsedData.booth || "";
+  const totalVoters = parsedData.totalVoters || "";
+  const parties = parsedData.parties || [];
+  const totalVotes = Array.isArray(parties) ? parties.reduce((s, p) => s + (p.votes || 0), 0) : "";
+  const presidingName = parsedData.officerName || parsedData.presidingOfficer || "";
+  const presidingPhone = parsedData.officerPhone || parsedData.presidingPhone || "";
+  const agents = parsedData.agents || [];
+  return { parsedData, div, dist, cons, boothVal, totalVoters, totalVotes, presidingName, presidingPhone, agents };
+}
+
+async function fetchLogs() {
+  const url = `${BASESCAN_ENDPOINT}?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address=${CONTRACT_ADDRESS}&topic0=${recordIface.getEvent("RecordStored").topicHash}&apikey=${BASESCAN_API_KEY}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(await r.text());
+  const j = await r.json();
+  if (j.status !== "1") return [];
+  const logs = Array.isArray(j.result) ? j.result : [];
+  return logs.map((lg) => {
+    try {
+      const parsed = recordIface.parseLog({ data: lg.data, topics: lg.topics });
+      const dataStr = parsed.args.data;
+      const decoded = decodeData(dataStr);
+      const time = lg.timeStamp ? new Date(Number(lg.timeStamp) * 1000).toISOString() : new Date().toISOString();
+      return {
+        tx: lg.transactionHash,
+        executedAt: time,
+        division: decoded.div,
+        district: decoded.dist,
+        constituency: decoded.cons,
+        booth: decoded.boothVal,
+        totalVoters: decoded.totalVoters,
+        totalVotes: decoded.totalVotes,
+        data: dataStr,
+        cid: parsed.args.cid,
+        signer: parsed.args.signer,
+      };
+    } catch (err) {
+      return null;
+    }
+  }).filter(Boolean);
+}
+
+async function fetchTxList() {
+  const url = `${BASESCAN_ENDPOINT}?module=account&action=txlist&address=${CONTRACT_ADDRESS}&sort=desc&apikey=${BASESCAN_API_KEY}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(await r.text());
+  const j = await r.json();
+  if (j.status !== "1") return [];
+  const txs = Array.isArray(j.result) ? j.result : [];
+  const selector = recordIface.getFunction("storeRecord").selector;
+  return txs.map((tx) => {
+    try {
+      if (!tx.input || !tx.input.startsWith(selector)) return null;
+      const decoded = recordIface.decodeFunctionData("storeRecord", tx.input);
+      const dataStr = decoded[0];
+      const cid = decoded[1];
+      const d = decodeData(dataStr);
+      const time = tx.timeStamp ? new Date(Number(tx.timeStamp) * 1000).toISOString() : new Date().toISOString();
+      return {
+        tx: tx.hash || tx.hash || tx.transactionHash || tx.hash,
+        executedAt: time,
+        division: d.div,
+        district: d.dist,
+        constituency: d.cons,
+        booth: d.boothVal,
+        totalVoters: d.totalVoters,
+        totalVotes: d.totalVotes,
+        data: dataStr,
+        cid,
+        signer: tx.from,
+      };
+    } catch {
+      return null;
+    }
+  }).filter(Boolean);
+}
 
 app.get("/api/records", async (req, res) => {
   if (!CONTRACT_ADDRESS || !BASESCAN_API_KEY) return res.status(500).json({ error: "Explorer API key or contract missing" });
   const { division, district, constituency, booth } = req.query;
   try {
-    const url = `${BASESCAN_ENDPOINT}?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address=${CONTRACT_ADDRESS}&topic0=${recordIface.getEvent("RecordStored").topicHash}&apikey=${BASESCAN_API_KEY}`;
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(await r.text());
-    const j = await r.json();
-    const logs = Array.isArray(j.result) ? j.result : [];
-    const mapped = logs.map((lg) => {
-      try {
-        const parsed = recordIface.parseLog({ data: lg.data, topics: lg.topics });
-        const dataStr = parsed.args.data;
-        let parsedData = {};
-        try { parsedData = JSON.parse(dataStr); } catch (_) {}
-        const div = parsedData.division || "";
-        const dist = parsedData.district || "";
-        const cons = parsedData.constituency || "";
-        const boothVal = parsedData.boothName || parsedData.booth || "";
-        const totalVoters = parsedData.totalVoters || "";
-        const parties = parsedData.parties || [];
-        const totalVotes = Array.isArray(parties) ? parties.reduce((s, p) => s + (p.votes || 0), 0) : "";
-        const time = lg.timeStamp ? new Date(Number(lg.timeStamp) * 1000).toISOString() : new Date().toISOString();
-        return {
-          tx: lg.transactionHash,
-          executedAt: time,
-          division: div,
-          district: dist,
-          constituency: cons,
-          booth: boothVal,
-          totalVoters,
-          totalVotes,
-          data: dataStr,
-          cid: parsed.args.cid,
-          signer: parsed.args.signer,
-        };
-      } catch (err) {
-        return null;
-      }
-    }).filter(Boolean);
-
+    let mapped = await fetchLogs();
+    if (mapped.length === 0) {
+      mapped = await fetchTxList();
+    }
     const filtered = mapped.filter((r) => {
       const divOk = !division || r.division === division;
       const distOk = !district || r.district === district;
