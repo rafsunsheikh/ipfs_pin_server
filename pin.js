@@ -366,7 +366,7 @@ app.get("/api/records", async (req, res) => {
     const r = await fetch(url);
     if (!r.ok) throw new Error(await r.text());
     const j = await r.json();
-    const logs = j.result || [];
+    const logs = Array.isArray(j.result) ? j.result : [];
     const mapped = logs.map((lg) => {
       try {
         const parsed = recordIface.parseLog({ data: lg.data, topics: lg.topics });
