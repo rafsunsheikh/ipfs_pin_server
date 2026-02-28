@@ -485,6 +485,16 @@ app.get("/api/admin/txlist", async (req, res) => {
   }
 });
 
+// Public tx list (no auth) for frontend display
+app.get("/api/txlist", async (_req, res) => {
+  try {
+    const list = await fetchTxList();
+    return res.json({ items: list.map((r) => r.tx) });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "failed to fetch txlist" });
+  }
+});
+
 app.get("/api/records", async (req, res) => {
   if (!CONTRACT_ADDRESS || !ETHERSCAN_API_KEY) return res.status(500).json({ error: "Explorer API key or contract missing" });
   const { division, district, constituency, booth } = req.query;
