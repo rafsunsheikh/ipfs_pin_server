@@ -425,19 +425,53 @@ async function fetchLogs() {
   }).filter(Boolean);
 }
 
-async function fetchTxList() {
-  if (!RPC_URL) return [];
-  // Fallback: use logs to derive tx hashes
-  const logs = await fetchLogs();
-  const seen = new Set();
-  const list = [];
-  logs.forEach((l) => {
-    if (!seen.has(l.tx)) {
-      seen.add(l.tx);
-      list.push({ tx: l.tx });
+async function fetchTxListExplorer() {
+  const url = `${BASESCAN_ENDPOINT}?module=account&action=txlist&address=${CONTRACT_ADDRESS}&sort=desc&apikey=${BASESCAN_API_KEY}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(await r.text());
+  const j = await r.json();
+  if (j.status !== "1") return [];
+  const txs = Array.isArray(j.result) ? j.result : [];
+  const selector = recordIface.getFunction("storeRecord").selector;
+  return txs.map((tx) => {
+    try {
+      if (!tx.input || !tx.input.startsWith(selector)) return null;
+      const decoded = recordIface.decodeFunctionData("storeRecord", tx.input);
+      const dataStr = decoded[0];
+      const cid = decoded[1];
+      const d = decodeData(dataStr);
+      const time = tx.timeStamp ? new Date(Number(tx.timeStamp) * 1000).toISOString() : new Date().toISOString();
+      return {
+        tx: tx.hash || tx.transactionHash || tx.hash,
+        executedAt: time,
+        division: d.div,
+        district: d.dist,
+        constituency: d.cons,
+        booth: d.boothVal,
+        totalVoters: d.totalVoters,
+        totalVotes: d.totalVotes,
+        data: dataStr,
+        cid,
+        signer: tx.from,
+      };
+    } catch {
+      return null;
     }
+  }).filter(Boolean);
+}
+
+async function fetchTxList() {
+  // Merge RPC logs (if any) with explorer txlist decoded inputs, dedupe by tx hash.
+  const [logs, explorer] = await Promise.all([
+    fetchLogs().catch(() => []),
+    fetchTxListExplorer().catch(() => []),
+  ]);
+  const byTx = new Map();
+  [...logs, ...explorer].forEach((r) => {
+    if (!r || !r.tx) return;
+    if (!byTx.has(r.tx)) byTx.set(r.tx, r);
   });
-  return list;
+  return [...byTx.values()];
 }
 
 app.get("/api/admin/txlist", async (req, res) => {
@@ -455,10 +489,7 @@ app.get("/api/records", async (req, res) => {
   if (!CONTRACT_ADDRESS || !BASESCAN_API_KEY) return res.status(500).json({ error: "Explorer API key or contract missing" });
   const { division, district, constituency, booth } = req.query;
   try {
-    let mapped = await fetchLogs();
-    if (mapped.length === 0) {
-      mapped = await fetchTxList();
-    }
+    const mapped = await fetchTxList();
     const filtered = mapped.filter((r) => {
       const divOk = !division || r.division === division;
       const distOk = !district || r.district === district;
