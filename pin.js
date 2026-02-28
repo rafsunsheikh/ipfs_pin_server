@@ -243,6 +243,7 @@ app.get("/api/search/users", async (req, res) => {
 
 // ---------- Pending results workflow ----------
 const PENDING_TABLE = "pending_results";
+const APPROVED_TABLE = "approved_results";
 
 app.post("/api/pending", async (req, res) => {
   const user = await requireUser(req, res);
@@ -356,6 +357,20 @@ app.post("/api/pending/finalize", async (req, res) => {
       .select()
       .single();
     if (err2) throw err2;
+    // insert into approved_results
+    await db.from(APPROVED_TABLE).insert({
+      data: row.data,
+      cid: row.cid,
+      presiding_email: row.presiding_email,
+      expected_agents: row.expected_agents,
+      signed_agents: row.signed_agents || [],
+      division: row.division || null,
+      district: row.district || null,
+      constituency: row.constituency || null,
+      booth: row.booth || null,
+      tx_hash: txHash,
+      status: "approved",
+    });
     return res.json({ ok: true, row: updated });
   } catch (err) {
     return res.status(500).json({ error: err.message || "finalize failed" });
@@ -499,6 +514,18 @@ app.get("/api/txlist", async (_req, res) => {
     return res.json({ items: list.map((r) => r.tx) });
   } catch (err) {
     return res.status(500).json({ error: err.message || "failed to fetch txlist" });
+  }
+});
+
+// Approved results (from Supabase) for UI "View All Records"
+app.get("/api/approved", async (_req, res) => {
+  try {
+    const db = await getSupabaseDb();
+    const { data, error } = await db.from(APPROVED_TABLE).select("*").order("created_at", { ascending: false });
+    if (error) throw error;
+    return res.json({ items: data || [] });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "failed to fetch approved results" });
   }
 });
 
