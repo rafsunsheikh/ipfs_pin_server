@@ -24,6 +24,7 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 const BASESCAN_API_KEY = process.env.BASESCAN_API_KEY || process.env.ETHERSCAN_API_KEY;
 const BASESCAN_ENDPOINT = process.env.BASESCAN_ENDPOINT || "https://api-sepolia.basescan.org/api";
+const RPC_URL = process.env.BASE_SEPOLIA_RPC_URL || process.env.RPC_URL;
 const allowedRoles = [
   "Pooling agents",
   "Presiding officer",
@@ -377,18 +378,34 @@ function decodeData(dataStr) {
 }
 
 async function fetchLogs() {
-  const url = `${BASESCAN_ENDPOINT}?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address=${CONTRACT_ADDRESS}&topic0=${recordIface.getEvent("RecordStored").topicHash}&apikey=${BASESCAN_API_KEY}`;
-  const r = await fetch(url);
+  if (!RPC_URL) return [];
+  const body = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "eth_getLogs",
+    params: [
+      {
+        fromBlock: "0x0",
+        toBlock: "latest",
+        address: CONTRACT_ADDRESS,
+        topics: [recordIface.getEvent("RecordStored").topicHash],
+      },
+    ],
+  };
+  const r = await fetch(RPC_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   if (!r.ok) throw new Error(await r.text());
   const j = await r.json();
-  if (j.status !== "1") return [];
   const logs = Array.isArray(j.result) ? j.result : [];
   return logs.map((lg) => {
     try {
       const parsed = recordIface.parseLog({ data: lg.data, topics: lg.topics });
       const dataStr = parsed.args.data;
       const decoded = decodeData(dataStr);
-      const time = lg.timeStamp ? new Date(Number(lg.timeStamp) * 1000).toISOString() : new Date().toISOString();
+      const time = lg.blockNumber ? new Date(parseInt(lg.timeStamp || lg.blockNumber, 16) * 1000).toISOString() : new Date().toISOString();
       return {
         tx: lg.transactionHash,
         executedAt: time,
@@ -409,38 +426,18 @@ async function fetchLogs() {
 }
 
 async function fetchTxList() {
-  const url = `${BASESCAN_ENDPOINT}?module=account&action=txlist&address=${CONTRACT_ADDRESS}&sort=desc&apikey=${BASESCAN_API_KEY}`;
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(await r.text());
-  const j = await r.json();
-  if (j.status !== "1") return [];
-  const txs = Array.isArray(j.result) ? j.result : [];
-  const selector = recordIface.getFunction("storeRecord").selector;
-  return txs.map((tx) => {
-    try {
-      if (!tx.input || !tx.input.startsWith(selector)) return null;
-      const decoded = recordIface.decodeFunctionData("storeRecord", tx.input);
-      const dataStr = decoded[0];
-      const cid = decoded[1];
-      const d = decodeData(dataStr);
-      const time = tx.timeStamp ? new Date(Number(tx.timeStamp) * 1000).toISOString() : new Date().toISOString();
-      return {
-        tx: tx.hash || tx.hash || tx.transactionHash || tx.hash,
-        executedAt: time,
-        division: d.div,
-        district: d.dist,
-        constituency: d.cons,
-        booth: d.boothVal,
-        totalVoters: d.totalVoters,
-        totalVotes: d.totalVotes,
-        data: dataStr,
-        cid,
-        signer: tx.from,
-      };
-    } catch {
-      return null;
+  if (!RPC_URL) return [];
+  // Fallback: use logs to derive tx hashes
+  const logs = await fetchLogs();
+  const seen = new Set();
+  const list = [];
+  logs.forEach((l) => {
+    if (!seen.has(l.tx)) {
+      seen.add(l.tx);
+      list.push({ tx: l.tx });
     }
-  }).filter(Boolean);
+  });
+  return list;
 }
 
 app.get("/api/admin/txlist", async (req, res) => {
