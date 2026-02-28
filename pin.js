@@ -24,7 +24,8 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY;
 const ETHERSCAN_ENDPOINT = process.env.ETHERSCAN_ENDPOINT || "https://api-sepolia.etherscan.io/api";
-const RPC_URL = process.env.BASE_SEPOLIA_RPC_URL || process.env.RPC_URL;
+// Primary RPC (Sepolia). Fallback to BASE_SEPOLIA_RPC_URL only if provided.
+const RPC_URL = process.env.SEPOLIA_RPC_URL || process.env.RPC_URL || process.env.BASE_SEPOLIA_RPC_URL;
 const allowedRoles = [
   "Pooling agents",
   "Presiding officer",
