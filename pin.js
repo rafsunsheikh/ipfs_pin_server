@@ -518,10 +518,16 @@ app.get("/api/txlist", async (_req, res) => {
 });
 
 // Approved results (from Supabase) for UI "View All Records"
-app.get("/api/approved", async (_req, res) => {
+app.get("/api/approved", async (req, res) => {
+  const { division, district, constituency, booth } = req.query;
   try {
     const db = await getSupabaseDb();
-    const { data, error } = await db.from(APPROVED_TABLE).select("*").order("created_at", { ascending: false });
+    let query = db.from(APPROVED_TABLE).select("*").order("created_at", { ascending: false });
+    if (division) query = query.eq("division", division);
+    if (district) query = query.eq("district", district);
+    if (constituency) query = query.eq("constituency", constituency);
+    if (booth) query = query.eq("booth", booth);
+    const { data, error } = await query;
     if (error) throw error;
     return res.json({ items: data || [] });
   } catch (err) {
