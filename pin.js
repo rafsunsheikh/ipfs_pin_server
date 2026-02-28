@@ -443,6 +443,17 @@ async function fetchTxList() {
   }).filter(Boolean);
 }
 
+app.get("/api/admin/txlist", async (req, res) => {
+  const me = await requireAdmin(req, res);
+  if (!me || me.error) return;
+  try {
+    const list = await fetchTxList();
+    return res.json({ items: list.map((r) => r.tx) });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "failed to fetch txlist" });
+  }
+});
+
 app.get("/api/records", async (req, res) => {
   if (!CONTRACT_ADDRESS || !BASESCAN_API_KEY) return res.status(500).json({ error: "Explorer API key or contract missing" });
   const { division, district, constituency, booth } = req.query;
