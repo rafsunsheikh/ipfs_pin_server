@@ -23,6 +23,7 @@ const PINATA_JSON_ENDPOINT = "https://api.pinata.cloud/pinning/pinJSONToIPFS";
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 const BASESCAN_API_KEY = process.env.BASESCAN_API_KEY || process.env.ETHERSCAN_API_KEY;
+const BASESCAN_ENDPOINT = process.env.BASESCAN_ENDPOINT || "https://api-sepolia.basescan.org/api";
 const allowedRoles = [
   "Pooling agents",
   "Presiding officer",
@@ -362,7 +363,7 @@ app.get("/api/records", async (req, res) => {
   if (!CONTRACT_ADDRESS || !BASESCAN_API_KEY) return res.status(500).json({ error: "Explorer API key or contract missing" });
   const { division, district, constituency, booth } = req.query;
   try {
-    const url = `https://api.basescan.org/api?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address=${CONTRACT_ADDRESS}&topic0=${recordIface.getEvent("RecordStored").topicHash}&apikey=${BASESCAN_API_KEY}`;
+    const url = `${BASESCAN_ENDPOINT}?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address=${CONTRACT_ADDRESS}&topic0=${recordIface.getEvent("RecordStored").topicHash}&apikey=${BASESCAN_API_KEY}`;
     const r = await fetch(url);
     if (!r.ok) throw new Error(await r.text());
     const j = await r.json();
